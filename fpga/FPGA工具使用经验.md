@@ -31,6 +31,7 @@
 | U28 | FPGA·调试 | **`raw_dump` 原始序列回传 + 两项结构诊断**：①「样本成对重复率」→ 反推**采集时钟真实频率**（全偶游程 = 重复铁证）②「坏点 × 码边界同翻位数」→ 区分**建立时间型**与模拟噪声型。聚合量定不了的案，抓一帧原始序列（本次 1 天 → 30 秒） | ★★★ |
 | U29 | FPGA·构建 | **确认"板上跑的是哪版配置"要查到布线后产物**：`.ipc` → `_mod.v` → **综合网表 `.vg`** → 时序报告 | 源码改了 ≠ 生效，mtime 也不可信（重跑会刷新但不改内容）。时序报告会打印相位的等效 ns（例 `CLKOUT1 rise=7.5ns/周期20ns=135°`）；`.fs`/`.bin` 字节数一致可判"重跑等价" | ★★★ |
 | U30 | 仪器·时钟 | **测"疑似异常"的时钟前先用已知频率的脚校准探头；能算出来的频率不要测** | 鳄鱼夹测 ADC 时钟读到 **14.6ns**（真实 **40ns**）＝无效读数（长地线振铃）。先量已知的 `da_clk`(50MHz=20ns) 同时验证探头倍率/接地/时基；PLL 输出频率可由 `fout=fclk_in×MDIV/(IDIV×ODIV)` 直接算 | ★★★ |
+| U31 | 编码/输出 | **画图与打印的"字符集"三坑**：matplotlib 方块 / Windows 重定向崩溃 / `.bat` 注释被执行 | ①图上中文：坐标轴（sans-serif）正常，但 `fig.text(family="monospace")` 会全变方块 → **图内状态文字用 ASCII**；②控制台正常但**被管道/重定向捕获时** stdout 退回 GBK，而 `µ(U+00B5)/✓/✗` 不在 GBK → `UnicodeEncodeError` 崩溃 → `reconfigure(errors="replace")` 防护；③UTF-8 写的 `.bat` 中文 REM 被 cmd 按 GBK 读 → 字节里可能出现 `&`/`>` → **cmd 会当命令执行**。见 C12 | ★★★ |
 
 ---
 
@@ -925,6 +926,34 @@ v[2k]==v[2k+1] 99.8%  且  相同值游程长度全为偶数(2/4/6/8/10…)
 
 ---
 
+### U31. ★★★ 画图与打印的"字符集"三坑（2026-09-10）
+
+**坑 1：matplotlib 里中文变方块（而且只变一部分）**
+- 默认字体 DejaVu Sans **没有中文字形** → 需 `matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', ...]`
+  （本机实测可用：Microsoft YaHei / SimHei / SimSun / Source Han Sans SC）。
+- **但设了字体后仍会有一部分变方块**：`fig.text(..., family="monospace")` 用的是**等宽字体列表**，
+  里面没有中文字体 → 那一行全变 □，而坐标轴标签（默认 sans-serif）却是正常的。
+  实测同一张图里：`时间/频率/幅度/ADC 码` 正常显示，`锁定/真实采样率/窗长/配对相位` 全是 □。
+- **对策：图内状态文字一律用 ASCII**（数字+英文），中文只留给坐标轴；或加 `--en` 全英文。
+
+**坑 2：交互式控制台正常，一被重定向/管道就崩**
+- Windows 下交互式控制台 Python 走 **Unicode 控制台 API（PEP 528）** → 中文、`µ` 都正常；
+- **但 `stdout` 被管道/重定向捕获时**，退回本地代码页（中文系统 = **cp936/GBK**），
+  而 `µ (U+00B5)`、`✓`、`✗` **不在 GBK 里** → `UnicodeEncodeError` 直接崩（本次实测崩在 `print("µs")`）。
+- **对策**：`sys.stdout.reconfigure(errors="replace")`（只放宽错误处理，不换编码）→ 退化而不是崩。
+- ⚠️ 这个坑**特别阴**：你自己在终端里跑一万次都不崩，**一进脚本/CI/管道就崩**。
+
+**坑 3：`.bat` 的编码 —— 中文注释会被 cmd 当命令执行**
+- 用 UTF-8 写的中文 `REM` 注释，cmd 按 ANSI/GBK 解码 → 拆出的字节里可能出现 `&`、`|`、`>` →
+  **cmd 会把它当命令分隔符执行**（本次实测报 `'xx' is not recognized as an internal or external command`，
+  还把注释片段当命令跑了）。
+- **对策**：`.bat` 一律用 **ANSI/GBK** 写（PowerShell：`Set-Content -Encoding Default`），
+  或注释只写 ASCII。
+
+**关联**：`共性问题集` C12；`tools/live_scope.py`；`tools/run_scope.bat`
+
+---
+
 ## 附录：常用路径速查
 
 ```
@@ -943,7 +972,7 @@ TerosHDL 扩展目录     C:\Users\hokuu\.vscode\extensions\teros-technology.ter
 
 ---
 
-*最后更新：2026-09-10（新增 U23 高云构建报告必查三项 + 注释/IP 配置漂移核查；U24 VOFA 折线图与文本日志的时间尺度差；U25 引脚物理邻接查询法；U26 新建文件必须加进工程；U27 串口粘行必须按范围过滤；U28 raw_dump 原始序列回传 + 样本重复率/同翻位数两项结构诊断；**U29 确认板上配置要查到布线后产物（ipc→_mod.v→.vg→时序报告）；U30 频率测量三条纪律（能算就别测 / 先校准探头 / 用数据反推交叉验证）**）*
+*最后更新：2026-09-10（新增 U23~U28 …；**U29 确认板上配置要查到布线后产物（ipc→_mod.v→.vg→时序报告）；U30 频率测量三条纪律（能算就别测 / 先校准探头 / 用数据反推交叉验证）；U31 画图与打印的"字符集"三坑（matplotlib 方块 / Windows 重定向崩溃 / `.bat` 注释被执行）**）*
 *配套文档：*
 - *`C:\Users\hokuu\Desktop\经验\fpga\FPGA问题排查手册.md` —— 环境配置 / 编译报错 / 命令速查*
 - *`C:\Users\hokuu\Desktop\经验\fpga\FPGA逻辑调试经验集.md` —— 代码逻辑 / 时序 / 调试方法论*
