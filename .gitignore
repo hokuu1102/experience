@@ -1,0 +1,15 @@
+# 生成物 / 缓存（不入库）
+__pycache__/
+*.pyc
+*.tmp
+*.bak
+*.fst
+*.vvp
+*.vcd
+logs/
+
+# Office / 系统临时文件
+~$*
+Thumbs.db
+Desktop.ini
+.DS_Store
