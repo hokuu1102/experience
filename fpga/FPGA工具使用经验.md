@@ -1103,6 +1103,37 @@ exit
 & "C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe" build_cli.tcl
 ```
 
+**★★ 标准化：把它变成"改完代码就自动跑一次"的一条命令（2026-09-11 起）**
+
+`ADDA/build_and_check.py` 把"编译 + 解析报告 + 给人话结论"包成一条命令：
+```powershell
+cd C:\Users\hokuu\Desktop\FPGA\ADDA
+python build_and_check.py --project ADDA              # 编译 + 检查
+python build_and_check.py --project ADDA --check-only # 只解析现有报告（不编译）
+python build_and_check.py --project beep_off          # 最小工程
+```
+它输出：编译阶段/错误/警告、Setup·Hold 违规数、各时钟 Fmax（约束 vs 实际）、
+**关键引脚落点（`beep=A13/out/DOWN`、`ad_clk_out=AA18/out`…）**、`.fs` 产物与大小、结论 PASS/FAIL。
+
+**为什么要固化成习惯**：综合/布线/时序/引脚**不需要板子**，而"仿真全过 ≠ 综合正确"
+本项目已经吃过一次亏（L27）。所以**改完 RTL 就跑一次**，成本几十秒，能拦住"上板才发现"的错。
+
+**⚠️ 必带的安全保护：脚本要自己拒绝"抢编译"**
+```python
+# 检测 tasklist 里有没有 gw_ide.exe / gw_sh.exe / programmer.exe；
+# 有就拒绝编译并提示（--force 可强制）
+```
+理由：用户手头正在用 IDE 编译时，命令行再去跑 `run all` 会**抢同一个 impl/ 目录和器件锁**
+→ 两边的产物都可能坏。**工具不能假设"没人正在用这个工程"。**
+
+**⚠️ 解析报告的两个小坑（都踩过）**
+1. **引脚号在报告里带后缀**：`A13/1`（引脚/球栅序号）→ 比较时必须 `split("/")[0]`，否则"期望 A13 实测 A13/1"会误判失败。
+2. **PULL 配置别按"窗口内搜关键字"抓**：引脚表每行是
+   `name - PIN Y dir SITE LVCMOS33 <drive> <PULL> …`；
+   若"往后 200 字符里找 DOWN"，会**串到下一行**（实测把 `uart_tx_out` 误判成 DOWN）。
+   ⇒ 按固定列序抓：`LVCMOS\d+\s+\S+\s+(\w+)`。
+
+
 **产物与校验**
 - 产物：`impl/pnr/<顶层名>.fs`（日志里能看到 综合→布线→时序→bitstream 各阶段百分比）
 - **怎么确认『编译的是对的顶层』**：看 `impl/pnr/<顶层名>.pin.html` 里有没有你期望的引脚
