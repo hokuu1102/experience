@@ -1042,6 +1042,20 @@ v[2k]==v[2k+1] 99.8%  且  相同值游程长度全为偶数(2/4/6/8/10…)
 
 **现象**：在 DSH 对话里点任何文件路径 → `path open failed: spawn powershell.exe ENOENT`。
 
+> **★ 这个功能有"两个连续的坑"，修好第一个之后会立刻撞上第二个（2026-09-11 实测）**
+>
+> | 阶段 | 报错 | 根因 | 谁的问题 |
+> |---|---|---|---|
+> | ① | `spawn powershell.exe ENOENT` | PATH 缺 `C:\Windows\System32\WindowsPowerShell\v1.0` | **机器环境**（改 PATH + **重启 DSH** 才生效） |
+> | ② | `Invoke-Item : 找不到路径"…\run_logger.bat"` | **点击的路径不完整/是相对路径** → GUI 按**工作区根目录**拼接 | **给路径的人（AI）** |
+>
+> ②的典型触发：在回答里写了 `.\run_logger.bat` 这种"要到某个子目录里去敲的**命令**"，
+> 它长得像路径 → 被当成相对路径解析 → 拼成 `C:\...\工作区根\run_logger.bat` → 不存在。
+> ⇒ **规矩：凡是要给对方点击的路径，必须写"完整绝对路径"（`C:\...\目录\文件.bat`），
+> 不要把"在子目录里执行的命令写法"（`.\xxx`、裸文件名）写成可点击样式。**
+> 反过来也有用：**点 `.bat` 的绝对路径 = 直接运行它**（`Invoke-Item` 对 .bat 就是执行），
+> 所以给用户 `.bat` 绝对路径反而是"一键启动"的好用法（前提是脚本自带 `pause`，窗口不会一闪而过）。
+
 **根因（一步定位，别猜）**：DSH 打开路径时是 **shell-free 地按 PATH 找可执行文件**：
 `node_modules/@deepseek-ai/dsh-native-command/lib/index.js` 里
 `run("powershell.exe", ["-NoProfile","-Command","Invoke-Item -LiteralPath ..."])`。
