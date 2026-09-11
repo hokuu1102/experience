@@ -1038,6 +1038,71 @@ v[2k]==v[2k+1] 99.8%  且  相同值游程长度全为偶数(2/4/6/8/10…)
          库的默认参数被当成实测参数、编译器/综合器的 `--target` 与实际目标不一致。
 
 **关联**：TROUBLESHOOTING 57 号；U29（确认板上配置要查到布线后产物）；L44；C09
+### U35. ★★★ DSH 里“点不开文件路径”：`spawn powershell.exe ENOENT` —— PATH 缺 Windows 默认项（2026-09-11）
+
+**现象**：在 DSH 对话里点任何文件路径 → `path open failed: spawn powershell.exe ENOENT`。
+
+**根因（一步定位，别猜）**：DSH 打开路径时是 **shell-free 地按 PATH 找可执行文件**：
+`node_modules/@deepseek-ai/dsh-native-command/lib/index.js` 里
+`run("powershell.exe", ["-NoProfile","-Command","Invoke-Item -LiteralPath ..."])`。
+而本机 PATH 里只有 `C:\Windows\System32`，**缺** `C:\Windows\System32\WindowsPowerShell\v1.0`
+（Windows 默认 PATH 里本来有这一项，被谁清掉了）→ 解析不到 → ENOENT。
+
+**定位手法（可复用）**：
+```powershell
+Get-ChildItem "<app>\node_modules" -Recurse -Include *.js |
+  Select-String -Pattern 'spawn powershell|powershell\.exe' -List
+```
+→ 找到调用点后，关键是看清它**『按 PATH 找』还是『按绝对路径找』**。
+
+**修法（⚠️ 千万别用 `setx`）**
+- ⚠️ **`setx PATH` 会把 PATH 截断到 1024 字符**；本机 PATH 已 ~1900 字符 → **会直接毁掉 PATH**。
+- ✅ 改注册表（无长度限制、不需要管理员）：
+  ```powershell
+  $k='HKCU:\Environment'; $add='C:\Windows\System32\WindowsPowerShell\v1.0'
+  $old=(Get-ItemProperty $k -Name Path).Path
+  Set-ItemProperty $k -Name Path -Value ($old.TrimEnd(';')+';'+$add) -Type ExpandString
+  ```
+- ✅ 验证：从注册表拼一个新 PATH 再 `Get-Command powershell.exe` → 能解析即修复成功。
+- ⚠️ **已在运行的进程不会感知新 PATH** → 必须**重启 DSH Desktop** 才能点开路径。
+
+**顺带学到的**：同一个程序里 `@deepseek-ai/dsh-pwsh-local` **自己会拼绝对路径候选**
+（`join(systemRoot,"System32","WindowsPowerShell","v1.0","powershell.exe")`）→
+所以『命令行能用、只有打开路径坏』是**两处解析策略不一致**的典型特征。
+遇到『某个功能单独坏』时，先查它是不是**换个方式找同一个依赖**。
+
+---
+
+### U36. ★★ 不开 IDE 也能编译高云工程：`gw_sh` 命令行（2026-09-11）
+
+**它是什么**：`C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe` 是 **Tcl 控制台**。
+⚠️ `gw_sh -h` **没有帮助**（会进交互态，stdin 关掉就退出，只打印一行横幅）。
+
+**正确用法**：写脚本文件传给它（本项目已放好 `ADDA/build_cli.tcl`、`ADDA/beep_off/build.tcl`）：
+```tcl
+open_project C:/path/to/ADDA.gprj
+set_option -top_module top_system     ;# ← 工程里模块多时**必须显式指定**，否则可能选错顶层
+run all                                ;# 综合 + 布局布线 + 生成 bitstream（不需要板子）
+exit
+```
+```powershell
+& "C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe" build_cli.tcl
+```
+
+**产物与校验**
+- 产物：`impl/pnr/<顶层名>.fs`（日志里能看到 综合→布线→时序→bitstream 各阶段百分比）
+- **怎么确认『编译的是对的顶层』**：看 `impl/pnr/<顶层名>.pin.html` 里有没有你期望的引脚
+  （本项目用它一次确认了 `beep - A13 out DOWN`、`ad_clk_out - AA18`）
+
+**价值**
+1. **不能上板时也能验证『改动能否过工具链』**（综合/布线/时序报告）——本项目吃过
+   『仿真全过 ≠ 综合正确』的亏（见 L27），这一步**不需要板子**；
+2. 只为编译一次不必开 IDE（IDE 启动 + 建索引更慢）。
+
+⚠️ **与 IDE 互斥**：不要一边开着 IDE 一边跑脚本；改 `.gprj`/`.cst` 前先关 IDE（经验库既有的规矩）。
+
+**关联**：TROUBLESHOOTING 56/57 号；U29（确认板上/产物配置）；L27
+
 ## 附录：常用路径速查
 
 ```
