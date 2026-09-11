@@ -1223,31 +1223,6 @@ python build_and_check.py --project beep_off          # 最小工程
 
 **关联**：TROUBLESHOOTING 59 号；U32（设置未提交）；U30（三条纪律）；`tools/log_check.py`、`tools/seg_vofa.py`
 
-## 附录：常用路径速查
-
-```
-TerosHDL 项目文件     <工程目录>/<工程名>.gprj
-TerosHDL 用户配置     <工程目录>/<工程名>.gprj.user
-默认构建目录          C:\Users\hokuu\.teroshdl\build\
-默认波形文件          C:\Users\hokuu\.teroshdl\build\wave.fst
-
-GTKWave               C:\iverilog\bin\gtkwave.exe
-iverilog              C:\iverilog\bin\iverilog.exe
-vvp                   C:\iverilog\bin\vvp.exe
-fst2vcd               C:\iverilog\bin\fst2vcd.exe
-
-TerosHDL 扩展目录     C:\Users\hokuu\.vscode\extensions\teros-technology.teroshdl-7.0.3\
-```
-
----
-
-*最后更新：2026-09-11（新增 U32~U33：**U32 整机端到端联仿**——给厂家原语打行为桩（PLLA/FFT_Top）让 iverilog 能 elaborate 顶层 + 真实 500kbps 串口时序逐字节断言上行帧 + 运行器用 Python（本机 pwsh 不在 PATH 且禁 `.ps1`）+ 按耗时分级（快 110s / 端到端 450s）；**U33 改文本文件前先按字节验编码**（`.bat` 是 GBK，用 UTF-8 工具改会把它整体转码 → 重踩 U31 的坑），顺带修掉"Python 被管道捕获时中文乱码/崩溃"：非 tty 直接切 UTF-8 输出、子进程输出按 UTF-8 解码）*
-*前一版：2026-09-10（U29 确认板上配置要查到布线后产物（ipc→_mod.v→.vg→时序报告）；U30 频率测量三条纪律（能算就别测 / 先校准探头 / 用数据反推交叉验证）；U31 画图与打印的"字符集"三坑（matplotlib 方块 / Windows 重定向崩溃 / `.bat` 注释被执行））*
-*配套文档：*
-- *`C:\Users\hokuu\Desktop\经验\fpga\FPGA问题排查手册.md` —— 环境配置 / 编译报错 / 命令速查*
-- *`C:\Users\hokuu\Desktop\经验\fpga\FPGA逻辑调试经验集.md` —— 代码逻辑 / 时序 / 调试方法论*
-- *`C:\Users\hokuu\Desktop\经验\器件积累.md` —— 电子元器件积累*
-
 ### U38. ★★★ 聚合读数不对时：**先抓一帧原始数据看"全局量"**，别急着改代码（2026-09-11）
 
 **场景**：板子报 `vpp=17`（只有理论值的 8%）、`period` 也偏。手头只有"每帧一个聚合数字"时，
@@ -1275,3 +1250,62 @@ TerosHDL 扩展目录     C:\Users\hokuu\.vscode\extensions\teros-technology.ter
    别让"修复前的反推数字"继续被引用（本项目就出现过"恒定 700/s 假穿越率"这种已被修掉的旧口径）。
 3. **抓帧工具要留下"格式自描述"**：同一个 `logs/raw_*.csv` 目录里既有文本帧又有纯值 CSV，
    读的时候必须能分辨（本项目补了 `peek_raw.py`，两种格式都认，缺 `#DEC` 时显式标注"按 D=1"）。
+
+---
+
+### U39. ★★★ 离线自检通过 ≠ 真机路径可用（真机才有"资源生命周期"）（2026-09-11）
+
+**场景**：新写的上板自检工具 `board_sweep.py`，`--dry-run` 两档全对（`FAIL=0` / `FAIL=1`），
+**一上真机第一次调用就崩**：
+`ValueError: "port" must be None or a string, not <class 'tuple'>`。
+修完又发现第二个：每一档都新建一个 reader → 串口从不释放 → **第 2 档必然**
+`could not open port ... Access is denied`。第三个：关串口瞬间读线程抛
+`'NoneType' object has no attribute 'hEvent'`（无害，但会吓人）。
+
+**三类"只有真机才有"的东西，离线自检一个都盖不住**：
+
+| # | 真机才有的 | 本次实例 | 离线自检为什么测不到 |
+|---|---|---|---|
+| 1 | 接口的**真实返回类型/副作用** | `pick_port()` 返回 **`(端口, 警告)` 二元组**，我当字符串用了 | dry-run 分支**根本不调这个函数** |
+| 2 | **独占资源的生命周期**（打开/占用/释放） | 每档新建 reader、旧的不关 → 第 2 档 `Access is denied` | 假 reader 不占任何资源 |
+| 3 | **关闭/退出的竞态** | `stop_flag` 之后仍有一次 `readline` 在飞 | 假线程不存在 |
+
+**⇒ 规矩（本次付了学费）**
+1. **给真机路径留一个"最小冒烟点"**：先只跑**一档**（例如 `--points <频率> <幅度>`），
+   确认三件事 —— **能连上 / 能出数 / 能释放** —— 再跑全流程。
+   （本次正是靠这一步在 30 秒内发现了剩下两个 bug。）
+2. **独占型资源（串口/USB/器件锁/文件锁）一律"单例 + 三条退出路径都释放"**：
+   正常结束、异常、Ctrl+C，用 `atexit` + `finally` 兜住。
+   用户看到的"拒绝访问/Access is denied"，九成是**自己上一个进程没放手**。
+3. **关资源时先"让人退出来"再关**：置 `stop_flag` → 等一个短延时让读线程离开阻塞调用 → 再 `close()`；
+   否则会把正常竞态打印成"异常"，把用户吓一跳（并且污染日志）。
+4. **表述要分清**：`--dry-run` 绿灯证明的是"**判据逻辑**对"，**不证明"真机链路"通**。
+   两层都要各自留一次实测记录（同 C13 的分层验证精神）。
+
+---
+
+## 附录：常用路径速查
+
+```
+TerosHDL 项目文件     <工程目录>/<工程名>.gprj
+TerosHDL 用户配置     <工程目录>/<工程名>.gprj.user
+默认构建目录          C:\Users\hokuu\.teroshdl\build\
+默认波形文件          C:\Users\hokuu\.teroshdl\build\wave.fst
+
+GTKWave               C:\iverilog\bin\gtkwave.exe
+iverilog              C:\iverilog\bin\iverilog.exe
+vvp                   C:\iverilog\bin\vvp.exe
+fst2vcd               C:\iverilog\bin\fst2vcd.exe
+
+TerosHDL 扩展目录     C:\Users\hokuu\.vscode\extensions\teros-technology.teroshdl-7.0.3\
+```
+
+---
+
+*最后更新：2026-09-11 下午（新增 **U38 聚合读数不对时先抓一帧原始数据看全局量**；**U39 离线自检通过 ≠ 真机路径可用**（接口真实返回值 / 独占资源生命周期 / 关闭竞态）；另：U33 追加 `.bat` 的 echo 只用 ASCII、U35 追加「可点击路径不能带参数」、U37 双通道信号源）。*
+*上次更新：2026-09-11（新增 U32~U33：**U32 整机端到端联仿**——给厂家原语打行为桩（PLLA/FFT_Top）让 iverilog 能 elaborate 顶层 + 真实 500kbps 串口时序逐字节断言上行帧 + 运行器用 Python（本机 pwsh 不在 PATH 且禁 `.ps1`）+ 按耗时分级（快 110s / 端到端 450s）；**U33 改文本文件前先按字节验编码**（`.bat` 是 GBK，用 UTF-8 工具改会把它整体转码 → 重踩 U31 的坑），顺带修掉"Python 被管道捕获时中文乱码/崩溃"：非 tty 直接切 UTF-8 输出、子进程输出按 UTF-8 解码）*
+*前一版：2026-09-10（U29 确认板上配置要查到布线后产物（ipc→_mod.v→.vg→时序报告）；U30 频率测量三条纪律（能算就别测 / 先校准探头 / 用数据反推交叉验证）；U31 画图与打印的"字符集"三坑（matplotlib 方块 / Windows 重定向崩溃 / `.bat` 注释被执行））*
+*配套文档：*
+- *`C:\Users\hokuu\Desktop\经验\fpga\FPGA问题排查手册.md` —— 环境配置 / 编译报错 / 命令速查*
+- *`C:\Users\hokuu\Desktop\经验\fpga\FPGA逻辑调试经验集.md` —— 代码逻辑 / 时序 / 调试方法论*
+- *`C:\Users\hokuu\Desktop\经验\器件积累.md` —— 电子元器件积累*
