@@ -91,6 +91,9 @@
 | **命令明明成功，却被报 `[exit code: 1]`（PowerShell 调 git/docker/npm）** | ⭐ **C30**（**退出码不是唯一判据**：`git push` 把正常进度写 stderr ⇒ 当它是**最后一条语句且带 `2>&1`** 时，pwsh 退出码被置 1，**覆盖真实的 `$LASTEXITCODE=0`**；⚠️ 真假失败退出码**相同**。✅ 末尾补 `; $null` 或**不写 `2>&1`**；⭐ 判结果看**独立证据**如 `git rev-parse origin/main` vs `HEAD`）、`C11` / `C22` |
 | **仿真/测试全绿，但换一个工具就"整个单元被丢弃"** | ⭐⭐ **C31**（**"能跑通" ≠ "能被工具接受"**：宽松前端会掩盖严格前端的拒绝；⚠️ 报错签名是 **`is ignored` / `was skipped` / `not included`** ⇒ 该单元**根本没进产物**；⭐ 判据要落在"**产物里有没有它**"上，如日志里必须有 **`Compiling module`**，⛔ 只有 `Analyzing` 不算）、`TROUBLESHOOTING.md` **70 号**、**L66** |
 | **写 RTL 时哪些语法能用（尤其 `.sv` 文件）** | ⭐⭐ **L66**（`.sv` 扩展名 ≠ 按 SV 编译；⛔ 别用 `N'()` / `longint` / `logic` / `always_ff` / `typedef`；⚠️ Verilog-2001 **不能对 `integer` 参数做位选**） |
+| **模块"编译全对、功能全废"（输出恒为初值）** | ⭐⭐ **L67**（`always @(*)` 里**不读任何信号**的组合块，仿真器**直接不执行**：警告 `found no sensitivities so it will never trigger`；⚠️ 综合器却会正常折叠 ⇒ **两个前端行为不一致**）、**C32**、`TROUBLESHOOTING.md` **71 号** |
+| **回归/测试脚本跑很久没动静，怀疑是不是卡住了** | ⭐⭐ **TROUBLESHOOTING.md 72 号**（`& $vvp` **裸调用无超时** ⇒ 一个 tb 挂死 ⇒ **整套验收永久静默阻塞**，且**与"跑得慢"无法区分**；✅ 修法 = `Start-Job` + `Wait-Job -Timeout` + 超时**判失败**；⚠️ `Start-Job` 里**拿不到退出码**）、**C29** |
+| **判据失败，不确定是被测有 bug 还是我的 tb 写错了** | ⭐⭐ **C33**（先怀疑"**我的时基/假设**"；⭐ 区分**电平 vs 脉冲/使能**语义——**宽度有信息**；判据要落在**稳态平台**上，⛔ 不是过渡过程）、`TROUBLESHOOTING.md` **73 号**、**C21** |
 
 ---
 
