@@ -45,6 +45,7 @@
 | U53 | 查证·时钟 | ⭐⭐⭐⭐ **"板子给我的时钟到底多少 MHz？"用供应商 `.sdc` 反证，别信原理图标签** | 三步：① 官方例程 `.sdc` 的 `create_clock -period` ② 官方 PLL 的输入频率字段 ③ ⭐ **用"例程必须能工作"做反证**（`×297/200 = 74.25MHz` 是 720p TMDS；若输入 100MHz 会算出 148.5MHz ⇒ 例程点不亮）。⚠️ 矢量 PDF 的抽取顺序 ≠ 版图位置 |
 | U55 | 仪器·示波器 | ⭐⭐ **触发源不用接 `EXT TRIG`**（内部从**已接通道**里选即可）；⭐ **频率计只读"最内层重复周期"**，⛔ 别用它判音频/事件频率；屏上"乱/抖"先查①触发源是否选到**没接**的那一路 ②触发电平（3.3 V 取 1.5 V） | ★★★ |
 | U54 | git·命令行 | ⭐⭐ **`git commit -m` 里别塞转义引号** —— PowerShell 不用 `\` 转义，`\"` 会提前闭合字符串 ⇒ 后面的字变成额外参数，报**"pathspec 不匹配"**（看起来像找不到文件，其实与文件无关） | 多行/含引号的消息**写文件 + `git commit -F`**；⚠️ 从文件读消息要先去掉 BOM | ★★ |
+| U56 | Office·文档生成 | ⭐⭐⭐⭐ **Word COM 生成"含图片"的文档会在 `SaveAs2` 静默挂死**（文本-only ✅ / 公式-only ✅ / 图片-only ❌）⇒ 换 **`python-docx` 直接写 OOXML**，公式走 **LaTeX→MathML→`MML2OMML.XSL`→OMML** 由 Word 原生渲染；⭐ 挂死定位靠"每步写日志到文件"+ `Start-Job`/`Wait-Job -Timeout`；验证要**真让 Word 打开**数 `OMaths`/`InlineShapes` | ★★★★ |
 
 ---
 
@@ -1802,6 +1803,79 @@ error: pathspec '补入证据表。回归' did not match any file(s) known to gi
 
 ---
 
+### U56. ★★★★ **Word COM 生成含图片的文档会静默挂死 —— 隔离到"最小复现"后换 python-docx 直接写 OOXML**（2026-09-21）
+
+**现象**：用 `New-Object -ComObject Word.Application` 脚本生成实验报告（文字 + 3 张 PNG + 18 个公式）。
+`Documents.Add()` / `TypeText` / `InlineShapes.AddPicture` / `OMaths.Add` / `OMaths.BuildUp()` **全部正常**，
+唯独走到 **`$doc.SaveAs2($OUT, 16)` 就没有任何返回，进程一直挂着**（无异常、无报错、无输出）。
+
+**隔离过程（关键：把"能用"和"不能用"的差别缩到最小）**
+
+| 试验 | 内容 | 结果 |
+|---|---|---|
+| 纯文字 + 保存 | `TypeText("测试中文")` → `SaveAs2` | ✅ 正常 |
+| 中文文件名 / 中文内容 | `_probe_中文.docx` | ✅ 正常 |
+| 保存到不同目录（含中文路径、纯 ASCII 路径） | 三处都试 | ✅ 正常 |
+| **加 1 张图片 + 保存** | 完整 3 张图 / 1 张 227 字节的 1×1 PNG | ❌ **全部挂死** |
+| 切默认打印机（Adobe PDF → Microsoft Print to PDF） | `$w.ActivePrinter = ...` | ❌ 仍挂死 |
+| 不设 `Width` 的图片 | 排除"改宽度触发重排" | ❌ 仍挂死 |
+| **纯公式（18 个）+ BuildUp + 保存** | 排除公式嫌疑 | ✅ 正常 |
+
+⇒ **判据收敛成一句话：只要文档里有 `InlineShapes`，`SaveAs2` 就挂。**
+（文本-only 与公式-only 都正常，所以与编码、路径、文件名、公式、打印机**都无关**。）
+
+**根因**：Word 在保存含浮动/内嵌图形的文档时要走**图形与打印子系统的重排路径**，
+本机那套打印/图形驱动（默认 `Adobe PDF`）会在这里卡住。
+⚠️ 注意 `Word COM` 本身**没坏** —— 同机早先生成"薄透镜"报告（32 个公式、无图片）**完全成功**，
+所以"COM 能用"这个结论**不能外推到"带图也能用"**（同族 `C31`：能跑通 ≠ 能接受）。
+
+**最终方案：绕开 Word COM，用 `python-docx` 直接写 OOXML**
+
+```powershell
+& "<python>" -m pip install python-docx latex2mathml
+```
+
+- **正文 / 表格 / 图片**：`python-docx` 的 `Document()` → `add_paragraph` / `add_table` / `add_picture`，
+  `doc.save(path)` **一次成功、毫秒级返回**（同样的内容 Word COM 挂了几十秒都不动）。
+- ⭐ **公式走 LaTeX → MathML → OMML**，由 Word 原生渲染（可编辑、不是图片）：
+  ```python
+  from lxml import etree
+  import latex2mathml.converter
+  XSL = r"C:\Program Files\Microsoft Office\root\Office16\MML2OMML.XSL"
+  _xslt = etree.XSLT(etree.parse(XSL))          # 装 Office 就有这个 XSL
+  omml = _xslt(etree.fromstring(latex2mathml.converter.convert(latex).encode())).getroot()
+  p._p.append(deepcopy(omml))                    # 挂到段落上
+  ```
+  ⚠️ XSLT 的输出根节点**不一定**是 `m:oMath`，要按命名空间找一下再取。
+- **中文字体**：`Normal` 样式要**同时**设 `w:eastAsia`（宋体）与 `w:ascii`/`w:hAnsi`（Times New Roman），
+  只设 `font.name` 中文会掉字体。
+
+**验证（⛔ 不要只看"文件生成了"）**
+
+1. 解包 docx 数结构：`oMath` 18 个 / `w:drawing` 3 个 / `w:tbl` 3 个 / `word/media/` 3 张图；
+2. ⭐ **真让 Word 打开一次**：`Documents.Open(...)` → 读 `OMaths.Count` / `InlineShapes.Count` / `Tables.Count`
+   （本次 18 / 3 / 3，说明公式被**识别为原生公式**而不是文本）；
+3. 用 `Range.Information(3)` 逐项打**页码**，确认没有"图被挤到下一页/表跨页断裂"。
+
+**通用化**
+
+1. ⭐⭐ **"某步挂死"要先做"最小复现"，把变量一个一个摘掉** —— 本次靠"文本-only ✅ / 图片-only ❌"
+   一步就把范围从"整个脚本"缩到"图片 + 保存"，**比读文档或猜驱动快得多**。
+2. ⭐⭐ **挂死（无返回、无异常、无输出）要用"写日志到文件"来定位**，
+   `Write-Output` 在挂死时可能整段丢失；每步 `Add-Content` 到文件才能看到**最后一条**卡在哪。
+3. ⭐⭐ **脚本挂死必须加超时**：`Start-Job` + `Wait-Job -Timeout`（同 `TROUBLESHOOTING.md` 72 号），
+   否则"卡住"和"跑得慢"无法区分，整个会话被拖死。
+4. ⭐ **COM 挂死后要 `Stop-Process -Force` 杀干净 `WINWORD`** 再重试，
+   残留进程会锁文件、让下一次运行表现得更怪。
+5. ⭐⭐ **换工具链比继续调它更划算**：花在"猜 Word 为什么挂"上的时间已经远超
+   "用 python-docx 重写"的成本，而且**换完一次成功**。
+   📌 判据：**当一条路径的失败点已经隔离清楚、但修复要依赖第三方黑盒时，先评估"绕开"的代价。**
+
+**关联**：`C41`（"简单变体通过"不能证明"完整变体可用"）、`U45`/`U46`（`.ps1` 执行策略与 BOM）、
+`U55`（仪器类经验）、`fpga/TROUBLESHOOTING.md` 72 号（外部进程必须带超时）
+
+---
+
 ## 附录：常用路径速查
 
 ```
@@ -1820,7 +1894,8 @@ TerosHDL 扩展目录     C:\Users\hokuu\.vscode\extensions\teros-technology.ter
 
 ---
 
-*最后更新：2026-09-18（新增 **U55 示波器的触发源不用接 `EXT TRIG`；频率计只读"最内层重复周期"**——⭐ 触发源是示波器**内部**从已接通道里选，`EXT TRIG` 只给"通道不够/外部基准"用；⭐ 频率计读的是**最内层重复周期**，看不见"脉宽每几百 µs 变一次"的慢调制（本次：I2S `DIN` 读 97.66 kHz = `BCK`/32，而文档写"1526 Hz"）；⚠️ 屏上"乱/抖"的两个真因 = 触发源选到**没接**的那一路 + 触发电平跑到范围外；配套逻辑集 `L61`（判据按**最小重复单元**算）、`TROUBLESHOOTING.md` 66 号）*
+*最后更新：2026-09-21（新增 **U56 Word COM 生成含图片文档在 `SaveAs2` 静默挂死** —— ⭐ 最小复现隔离出"文本-only ✅ / 公式-only ✅ / **图片-only ❌**"，与编码/路径/文件名/打印机**都无关**；⭐ 换 `python-docx` 直接写 OOXML，公式走 **LaTeX→MathML→`MML2OMML.XSL`→OMML** 由 Word 原生渲染；⭐ 挂死定位靠"每步落盘日志"+`Start-Job`/`Wait-Job -Timeout`；验证要**真让 Word 打开**数 `OMaths`/`InlineShapes`/`Tables`；配套共性集 **C41**）*
+*上次更新：2026-09-18（新增 **U55 示波器的触发源不用接 `EXT TRIG`；频率计只读"最内层重复周期"**——⭐ 触发源是示波器**内部**从已接通道里选，`EXT TRIG` 只给"通道不够/外部基准"用；⭐ 频率计读的是**最内层重复周期**，看不见"脉宽每几百 µs 变一次"的慢调制（本次：I2S `DIN` 读 97.66 kHz = `BCK`/32，而文档写"1526 Hz"）；⚠️ 屏上"乱/抖"的两个真因 = 触发源选到**没接**的那一路 + 触发电平跑到范围外；配套逻辑集 `L61`（判据按**最小重复单元**算）、`TROUBLESHOOTING.md` 66 号）*
 *上次更新：2026-09-17 深夜（新增 **U52 命令行全流程"通过之后必须看四样"**——⭐ **不写 `.sdc` 时序约束 ⇒ 时序分析是空的**（`<Timing Constraints File>: ---` + `WARN (TA1132)`），"零 error + 生成 bitstream"说明不了时序；并给 `U23` **追加** `PR1014` 的准确判定法与成因查法（`CFG` 列的 `GCLKT_n`/`GCLKC_n` vs `EMCCLK`、`GCLK_PIN 0/40`）——那条警告与旧"板子全死"事故**同签名但无害**；配套共性集 `C16`（警告的严重性由**下游指标**裁决）、`TROUBLESHOOTING.md` 62 号；同时补齐 U49~U52 的索引行）（上次新增 **U45 PowerShell 脚本"跑不起来"的四个坑**（定位变量 `$MyScriptRoot` 类问题 / `-Filter` 只收一个模式 / 执行策略 / 本机无 `pwsh`）、**U46 带中文的 `.ps1` 必须 UTF-8 with BOM**（无 BOM 被按 GBK 解码 → 报错行与病因无关；编辑工具会静默丢 BOM）、**U47 iverilog 语言与打印坑**（`expect` 是保留字 / 任务端口要用非 ANSI 风格 / 别用端口传字符串 / 例化端口不能引用后声明信号）、**U48 `$dumpfile` 目录不自动创建且运行期才报**；触发场景是一个"一条命令跑全部 TB"的回归脚本**从来没有跑通过**——6 个坑叠加，详见 `TROUBLESHOOTING.md` 60 号；配套逻辑集 `L52`（断言必须先证明会触发）、共性集 `C14`（证据与判定分开））；上次：2026-09-11 深夜（新增 **U44 交付/工程路径必须全 ASCII**：中文目录下高云报 SORT-1002 且 Hierarchy 空白；同一份工程在英文路径下 gw_sh 编译全过）；以及 **U43 删设计文件前必须做大小写不敏感的反向依赖检查**：按小写扫依赖把 pll_init.v（模块名 PLL_INIT）当死代码删了，综合报 EX3937；另含 U40/U41/U42）；*上次：2026-09-11 下午（新增 **U42 测量通道被自己的输出堵住时找一把不经过该反馈的独立尺子**（T60 破局思路 + 位宽回绕/兜底打坏正常路径两个坑）；**U41 自适应抽取的帧会混叠——先用混叠恒等式反推真实输入**；**U40 自动判据里不能掺"人应该多快做完动作"——用独立标尺定位事件时刻**（第一次真跑就因此误判过 FAIL）；**U38 聚合读数不对时先抓一帧原始数据看全局量**；**U39 离线自检通过 ≠ 真机路径可用**（接口真实返回值 / 独占资源生命周期 / 关闭竞态）；另：U33 追加 `.bat` 的 echo 只用 ASCII、U35 追加「可点击路径不能带参数」、U37 双通道信号源）。*
 *上次更新：2026-09-11（新增 U32~U33：**U32 整机端到端联仿**——给厂家原语打行为桩（PLLA/FFT_Top）让 iverilog 能 elaborate 顶层 + 真实 500kbps 串口时序逐字节断言上行帧 + 运行器用 Python（本机 pwsh 不在 PATH 且禁 `.ps1`）+ 按耗时分级（快 110s / 端到端 450s）；**U33 改文本文件前先按字节验编码**（`.bat` 是 GBK，用 UTF-8 工具改会把它整体转码 → 重踩 U31 的坑），顺带修掉"Python 被管道捕获时中文乱码/崩溃"：非 tty 直接切 UTF-8 输出、子进程输出按 UTF-8 解码）*
 *前一版：2026-09-10（U29 确认板上配置要查到布线后产物（ipc→_mod.v→.vg→时序报告）；U30 频率测量三条纪律（能算就别测 / 先校准探头 / 用数据反推交叉验证）；U31 画图与打印的"字符集"三坑（matplotlib 方块 / Windows 重定向崩溃 / `.bat` 注释被执行））*
