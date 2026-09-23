@@ -2113,3 +2113,235 @@ foreach($n in @('lo','hi','kk','ticks_used','before')){
 2. ⭐⭐ **别被"报错行数很多"骗成结构性问题** ——
    ⚠️ 一个语法错会让**后续一大片**都报错，⭐ **真正的原因通常只在第一行**；
 3. ⭐ **用"一次一个标识符"的最小文件**定位，比反复读代码快得多。
+
+
+### U61. ★★★★ **`.ps1` 一律纯 ASCII —— PS 5.1 按 GBK 解无 BOM 的 UTF-8，中文注释可能改变语法**（2026-09-22）
+
+**背景**：改一个 `.ps1` 构建脚本，顺手加了**中文注释**。
+
+⚠️ 该文件**原本几乎是纯 ASCII**（全文只有 **2 个**非 ASCII 字节），
+🔴 我一改加了 **771 个**。
+
+**为什么危险**：⭐ **PowerShell 5.1 读【无 BOM 的 UTF-8】会按 GBK 解码**
+⇒ ⚠️ 中文注释被解成乱码字节
+⇒ 🔴 若乱码里**恰好出现反引号（`` ` ``）、引号、`$`** ⇒ **真的改变语法**
+⇒ ⚠️ 最坏情况是**静默解析成别的东西**，而不是报错。
+
+**⭐ 自查手法（机械可判定）**：
+
+```powershell
+# 1) 数非 ASCII 字节
+$b = [System.IO.File]::ReadAllBytes((Resolve-Path 'script.ps1'))
+($b | Where-Object { $_ -gt 127 }).Count      # 期望 0
+
+# 2) 确认 PS 能解析
+powershell -NoProfile -Command `
+  "$null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw 'script.ps1'), [ref]$null); 'parse OK'"
+```
+
+⭐ 改之前先 `git show HEAD:script.ps1` 数一遍**原来的**非 ASCII 字节数，
+⚠️ 才知道**是不是自己引入的**（⭐ 本次就是靠这个发现原来只有 2 字节）。
+
+**⭐ 为什么不在 `.ps1` 里写中文**：
+⚠️ 不是"编码偏好"问题，是**PS 5.1 的默认解码行为**问题 ——
+⭐ 同一个文件在 PS 7（默认 UTF-8）下没问题、在 **PS 5.1** 下可能出错，
+⇒ ⭐ **看起来"在我机器上好好的"**。
+
+**📌 结论**：
+1. ⭐⭐ **`.ps1` 纯 ASCII**（中文说明写到 `.md` 里，脚本里留英文注释 + 文档链接）；
+2. ⭐ 改脚本后**两个自检都跑**：数非 ASCII 字节 + `PSParser::Tokenize`；
+3. ⭐ **先看 HEAD 版本的基线**，⛔ 别把历史遗留的编码问题算到自己头上
+   （⚠️ 也别把自己引入的当成"本来就有"）。
+
+---
+
+### U62. ★★★★ **ESP-IDF（Windows）环境配置：EIM 安装 + 三个"环境变量级"开关**（2026-09-23）
+
+**这套流程的原理不只对 ESP32 成立** —— 凡是"官方安装器 + 多工具链 + Python 构建"的
+嵌入式 SDK（ESP-IDF / Zephyr / PlatformIO / nRF Connect），下面几条都值得先查。
+
+#### ① 安装：用 EIM，不要用老的 git clone + `install.ps1`
+
+```powershell
+winget install Espressif.EIM-CLI          # 或 Espressif.EIM（GUI 版）
+eim install -i v5.5 -n true -p C:\Espressif   # -n true = 非交互，可后台跑
+eim list                                   # 查看已装版本 / 当前选中项
+```
+
+⭐ **EIM 会自动测速选镜像**（本次实测：`git.espressif.com.cn` 181ms vs github 2259ms，
+`dl.espressif.cn/github_assets` 86ms），⚠️ 不用手工配镜像 URL。
+
+#### ② ⚠️ 环境变量：`export.ps1` 与 EIM 布局**不兼容**
+
+网上教程让你执行 `esp-idf\export.ps1`，⭐ **在 EIM 安装下必然失败**：
+
+```text
+ERROR: ESP-IDF Python virtual environment
+"C:\Users\<u>\.espressif\python_env\idf5.5_py3.12_env\Scripts\python.exe" not found.
+```
+
+**根因**：`export.ps1` 按**传统布局**去 `%USERPROFILE%\.espressif` 找；
+而 EIM 把工具装到 `-p` 指定的目录（本次 `C:\Espressif\tools`）、
+venv 在 `C:\Espressif\tools\python\<版本>\venv`。
+
+✅ **正解**：用 EIM 生成的激活脚本（安装日志里会打印路径）：
+
+```powershell
+. C:\Espressif\tools\Microsoft.v5.5.PowerShell_profile.ps1
+# 之后 idf.py / esptool.py / espefuse / espsecure / otatool.py / parttool.py 均可用
+```
+
+⭐ **诊断第一步**：激活后先看这三个变量，比任何日志都直接：
+
+```powershell
+echo $env:IDF_PATH           # 应为 <安装路径>\v5.5\esp-idf
+echo $env:IDF_TOOLS_PATH     # 应为 <安装路径>\tools
+echo $env:IDF_PYTHON_ENV_PATH
+```
+
+⚠️ **前置**：Windows 客户端默认执行策略是 `Restricted`，**禁止运行一切 `.ps1`**，
+激活脚本会直接加载失败（现象：桌面快捷方式点了没反应）。按需放开：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # 仅当前用户，无需管理员
+```
+
+#### ③ ⭐⭐ 工程路径**必须全 ASCII** —— 非 ASCII 会以 3 种不同方式碎掉
+
+⭐ **与 `U44`（高云中文路径 `SORT-1002`）是同一类问题的不同宿主**，
+但本宿主更恶劣：**同一根因有 3 种面孔，且没有一种提示"是路径问题"**。
+
+| 组件 | 报错 | 看起来像 |
+|---|---|---|
+| Python `json.load` | `UnicodeDecodeError: 'gbk' codec can't decode byte 0x80` | 像文件损坏 |
+| `ccache` | `filesystem error: Cannot convert character sequence: Illegal byte sequence` | 像 ccache 的 bug |
+| Python → `objdump.exe` 传参 | `.../目/esp32-/...: No such file or directory` | 像文件真丢了 |
+
+**实测矩阵（已确认）**
+
+| 条件 | 结果 |
+|---|---|
+| 中文路径 + ccache 开 | 🔴 失败 |
+| 中文路径 + ccache 关 | 🔴 失败（编到 479/487，倒在 objdump 传参） |
+| **纯英文路径** | ✅ **esp32 / esp32s3 双双成功** |
+
+**两个开关的作用边界（⭐ 容易误以为"设了就万事大吉"）**
+
+| 开关 | 治什么 | ⚠️ **不治什么** |
+|---|---|---|
+| `PYTHONUTF8=1`（PEP 540） | Python **文件 I/O** 的 locale 解码 | ⛔ **argv 传给原生程序**（现象 3 照旧） |
+| 关 `ccache` | ccache 的 `std::filesystem` 崩溃 | ⛔ 其余两种 |
+
+⇒ ⭐⭐ **结论：纯 ASCII 路径才是唯一解**；上面两个开关只能"少踩一个坑"。
+
+**注入方式（定向，⛔ 不动系统全局变量）**：VSCode 里改 profile 的 settings：
+
+```jsonc
+"idf.customExtraVars":            { "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8" },
+"terminal.integrated.env.windows": { "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8" },
+"idf.enableCCache": false
+```
+
+⚠️ 手工终端里编译时**要自己补** `$env:PYTHONUTF8 = "1"`（激活脚本不管这个）。
+
+#### ④ ⚠️ 安装器报"成功"但工具链可能是残缺的
+
+⭐ 本次 EIM 对**路径最深的两个工具链**解压失败后回退到 PowerShell `Expand-Archive`，
+**静默产出残缺目录树并打印 `Decompression completed successfully`**：
+
+| 工具链 | 实际 | 应为 | 完整度 |
+|---|---|---|---|
+| `xtensa-esp-elf` | 131 文件 / 150.8 MB | 2055 文件 / 1241.6 MB | **12%** |
+| `riscv32-esp-elf` | 39 文件 / 100.2 MB | 2262 文件 / 2321.7 MB | **4%** |
+
+症状是 `fatal error: cannot execute 'cc1'`（`cc1.exe` 全树缺失）。
+
+✅ **修法**：按 `esp-idf\tools\tools.json` 里的原始 URL 重新下载，
+用 **`tar.exe`(bsdtar，长路径感知)** 解压，⛔ 不要用 `Expand-Archive`：
+
+```powershell
+tar.exe -xf <tool>.zip -C C:\Espressif\tools\<name>\<version>
+```
+
+⭐ **完整性判据（机械可判定，⛔ 别看日志结论）**：
+
+```powershell
+Get-ChildItem C:\Espressif\tools -Recurse -Filter cc1.exe      # 正常有多条
+(Get-ChildItem <工具链目录> -Recurse -File).Count              # 应为数千，⛔ 不是一两百
+```
+
+> ⚠️ 本机**已开** `LongPathsEnabled=1`，但那只对声明了 `longPathAware` 清单的程序生效；
+> **Windows PowerShell 5.1 不在其列**，`Expand-Archive` 照样截断。
+
+**📌 结论**
+1. ⭐⭐ **判据落在交付物上**（能否产出 `.bin`），⛔ 不是安装器的结论行（同 `C20`）；
+2. ⭐⭐ **工程路径全 ASCII** —— 这是唯一能一次绕开全部三种故障的做法（同 `U44`）；
+3. ⭐ 用 **EIM 自己的激活脚本**，⛔ 不用 `export.ps1`（布局不同）；
+4. ⭐ 环境装配类任务**要先查执行策略**（`Restricted` 会让整条链路静默失效，同 `U45` 第 3 条）；
+5. ⭐⭐ **换路径后必须重跑完整构建**才算验证（本次即靠"ASCII 路径下重编到 rc=0"定论）。
+
+**关联**：`共性问题集.md` **C53**（非 ASCII 路径的多重故障形态）、`fpga/TROUBLESHOOTING.md` **90 号**（完整排查过程）、
+`U44`（高云中文路径 `SORT-1002`）、`U45`（`.ps1` 跑不起来的四个坑）、`U46`/`U61`（`.ps1` 编码）、
+`C20`（存在性 ≠ 可用性）
+
+---
+---
+
+### U63. ★★★★★ **长任务的结果必须【独立落盘】—— ⛔ 不能只存在于"调用方的管道"里**（2026-09-23）
+
+**场景**：一个 4 小时的全量变异测试挂在后台跑。
+调用它时用了 `cmd | Tee-Object -FilePath <log>`，看起来"结果会存到文件"。
+后来这个调用被中断 ⇒ **整个 4 小时的结果【一条都没拿到】** ——
+虽然它已经跑完了约 72/76 个变异体，**那些工作全部作废**。
+
+**根因（两层，缺一不可）**
+
+1. ⭐⭐ **被调脚本自己不落盘** —— 实测该脚本**只 `Write-Host`**，
+   全文没有任何 `Out-File` / `Export-Csv` / 结果文件（唯一一次 `Out-File` 是写锁）。
+   ⇒ 🔴 **结论只存在于 stdout**，而 stdout 的**寿命 = 调用它的那个进程的寿命**。
+2. ⭐⭐ **"管道 + Tee"是调用方的临时设施，⛔ 不是被测方的保证** ——
+   ⚠️ 它**看起来像**落盘（你确实有个日志文件），
+   但它**随调用进程一起死**，且**位于同一个进程树里**。
+   ⇒ ⭐ **"我以为存在文件里了" ≠ "文件是独立可靠的"**。
+
+**为什么会连脚本一起死（这才是最坑的）**
+
+⭐ 用**阻塞等待**（`wait`/长时间前台）去等一个后台任务时，
+⚠️ 等待调用一旦被中断，**它的进程树被整体拆除** ⇒
+🔴 **被等的任务连同它的输出缓冲一起消失**。
+⚠️ 更糟的是：**这时的表现和"正常跑得慢"完全一样**，
+⭐ 只有去查 `pid` 才看得出它已经死了（本次即：锁还在、`pid` 已不存在）。
+
+**正确做法（三层，逐层加固）**
+
+| 层 | 做法 |
+|---|---|
+| **1 ⭐⭐⭐** | **让"结果落盘"由【独立进程】负责** —— 另起一个只读的看护进程，周期性把日志**快照到另一个文件**。⭐ 它**不碰被测任务**，被杀也不影响对方 |
+| **2 ⭐⭐** | **⛔ 不用阻塞等待去等长任务** —— 结束本轮、等系统通知；⭐ 或**用独立进程轮询一个"完成信号"**（本例=锁文件消失） |
+| **3 ⭐⭐** | **判据要包含"结果文件存在且非空"**，⛔ 不是只看"任务跑完了"（同 `C34`：**"全绿" ≠ "证据还在"**） |
+
+**看护器的写法要点**
+
+```
+- 只读：⛔ 不改被测文件、⛔ 不碰锁（避免自己成为第二个"改文件的工具"）
+- 容错读：目标文件正被追加 ⇒ 必须以 FileShare.ReadWrite 打开，否则抛异常
+- 去重：同一结论只记一次（$seen 哈希）
+- 自证：结束时写明"捕获到 N 条结论"，便于判断是否完整
+```
+
+**可迁移的做法**
+
+1. ⭐⭐⭐ **凡"跑很久才有结论"的任务，先问一句"这个结论【独立】存哪了"** ——
+   ⚠️ 如果答案里出现"调用方的 stdout / 管道 / 当前会话"，⇒ ⭐ **就是没存**。
+2. ⭐⭐⭐ **要断言的结论必须落到【被测方无法影响的】文件里** ——
+   ⚠️ 由调用方临时搭的落盘设施，**和被调用方共享同一个命运**。
+3. ⭐⭐ **"中断等待"会连带杀死被等的任务** ⇒ ⛔ **不要用阻塞等待等长任务**；
+   ⭐ 用"结束本轮 + 等通知"或"独立进程轮询完成信号"。
+4. ⭐⭐ **进程死后要先看【锁/哨兵文件】再动手** ——
+   本次正是靠"锁还在但 pid 已死 + 残留 `.bak`"判定出"测试被中途杀死"（同 `C38`）。
+5. ⭐ **判断"在跑还是死了"要看 `pid` 存活，⛔ 不是看锁文件在不在** ——
+   ⚠️ 锁是**文件**，进程被杀后它**不会自己消失**。
+
+**关联**：`共性问题集.md` **C55**（结论寿命 = 载体寿命）、`fpga/TROUBLESHOOTING.md` **92 号**、
+`C38`（"改文件再还原"的工具被杀死 ⇒ 世界停在半改状态）、`C34`（换执行方式 ⇒ 产物静默丢失）、
+`C52`（运行中的快照都是过程量）、`L74`（退出码 0 ≠ 产物是新的）
