@@ -2608,3 +2608,60 @@ Backtrace: ... vTaskDelay ... task_drain (ble_main.c:484)
 **同族**：`U55`（示波器读数与设计值差整数倍 · 触发源不必接 EXT TRIG）· `U67`（先烧官方例子做对照）· `C62`（先问"你是怎么接/怎么发的"）· `L61`（判据要打在真正被证明的信号上）。
 
 ---
+
+## U69. `git reset --soft <远端>` 在"本地落后于远端"时，会**伪装成"删掉了队友的文件"**
+
+**状态**：`[已确认]`（2026-09-27 实测）
+
+### 指纹
+
+⭐ 按"push 前压成一个 commit"的流程执行
+`git reset --soft origin/main` 之后，`git status` 出现：
+
+```
+D  rtl/w3a/play_mode_ctrl.v      ← 🔴 队友【新增】的文件被标记为删除
+D  rtl/w3a/async_pluck_capture.v
+M  rtl/top.v
+```
+
+⚠️ **看起来像"我把队友的文件删了"** —— ⚠️ **其实一个字节都没动。**
+
+### 根因
+
+⭐⭐ **`reset --soft` 只移动 HEAD，⛔ 不碰工作区和索引。**
+⭐ 当本地 HEAD **落后**远端若干提交时，`--soft` 会把 HEAD 退到远端
+⇒ ⭐ **索引里还是"我那个旧快照"**
+⇒ ⭐ 而**队友那些文件在我的旧快照里根本不存在**
+⇒ 🔴 **于是 `git status` 把"索引 vs HEAD"的差异显示成**删除**。**
+
+📌 **关键认知**：⭐ 这个 `D` 是**索引状态**，⛔ 不是工作区状态 ——
+⚠️ **文件好好躺在磁盘上**（用 `Get-ChildItem` 一验就知道）。
+
+### ✅ 正确做法
+
+🔴 **`reset --soft` 的前提是"本地 HEAD 就是远端 HEAD"**（⭐ 即 `ahead N, behind 0`）。
+⭐ **若 `behind > 0`，必须先同步**：
+
+```powershell
+git fetch origin
+git status -sb                     # ⭐ 先看清 ahead/behind
+# ⭐ behind > 0 ⇒ 先 rebase 或 merge 到最新，⛔ 别直接 reset --soft
+git log --oneline HEAD..origin/main   # ⭐ 看清远端领先了什么
+```
+
+⭐ **一旦已经踩了**：⭐ **`git reset --hard origin/main`** 回到干净态
+（⭐ **前提：我的改动已经有备份** —— tag / `git bundle` / 另存文件）。
+
+### 教训
+
+⭐⭐ **"危险命令"的危险性取决于【当前所处状态】，⛔ 不取决于命令本身。**
+⭐ 同一条 `reset --soft`：
+· 在 `ahead N, behind 0` 时 ⇒ ✅ **完全安全**（这正是压 commit 的标准用法）
+· 在 `behind > 0` 时 ⇒ 🔴 **表现为"删除别人的文件"**，⭐ 极易被误判成自己操作失误
+
+📌 **纪律**：⭐ **每次 `reset --soft` 之前先跑 `git status -sb` 看 `behind`**（⭐ 一个字的成本）。
+
+**同族**：`U54`（`git commit -m` 别塞转义引号）· `U29`（确认"板上跑的是哪版"）·
+`C04`（危险操作的后果取决于状态，⛔ 不是操作本身）。
+
+---
