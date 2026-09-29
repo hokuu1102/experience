@@ -4621,9 +4621,10 @@ slack = 0.002 ns · 27 级逻辑
 ```
 ⭐ 11 个变异体：全部编译成功（⛔ 不再有 already declared / 解析失败）
 ⭐ 锚点静态核对：11/11 有效且唯一
-⭐ 最终判定：见 sim/evidence/check_nonempty_run3.log
-   ⚠️ 第 1 轮（修完前三个缺陷）：11 个里 9 OK / 2 BAD（MUT7 目录不匹配 · MUT8 判据名编码）
-   ⇒ ⭐ 第 2 轮（修完目录 + 判据名）：⏳ 见上日志
+⭐ 最终判定：⭐ **11/11 全部 OK** —— `PASS: met_btn non-emptiness -- every criterion can fail`
+   （⭐ 见 `sim/evidence/check_nonempty_run3.log`）
+   ⚠️ 过程：⭐ 第 1 轮（只修前三个缺陷）⇒ **9 OK / 2 BAD**（MUT7 目录不匹配 · MUT8 判据名编码）
+   ⇒ ⭐ 第 2 轮（补修 dump 目录 + 判据名改 ASCII）⇒ ⭐ **11/11** ✅
 ⭐ 其中新增 3 个（限幅器流水）：忘加宽 valid_d / valid_d 差一拍 / valid 提前 6 拍
 ```
 
